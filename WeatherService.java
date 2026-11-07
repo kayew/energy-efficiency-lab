@@ -17,6 +17,7 @@ final class WeatherService {
     private final Thread screenThread = new Thread(screen, "screen");
     private final Thread syncThread = new Thread(sync, "sync");
     private int inFlight = 0;
+    private int scheduledWorkers;
     private boolean refreshActive = false;
     private volatile boolean running = true;
 
@@ -27,6 +28,7 @@ final class WeatherService {
 
     void start() {
         int workerCount = Math.max(4, Runtime.getRuntime().availableProcessors());
+        scheduledWorkers = chooseParallelism(workerCount, Battery.percent());
         for (int i = 0; i < workerCount; i++) {
             Thread t = new Thread(this::workerLoop, "worker-" + i);
             workers.add(t);
@@ -58,6 +60,7 @@ final class WeatherService {
         Item s = express.poll();
         if (s != null) return s;
         synchronized (lock) {
+            if (inFlight >= scheduledWorkers) return null;
             Item head = line.peekFirst();
             if (head == null || refreshActive) return null;
             if (head.kind == Item.Kind.REFRESH) {
@@ -68,6 +71,12 @@ final class WeatherService {
             inFlight++;
             return head;
         }
+    }
+
+    private static int chooseParallelism(int workerCount, int batteryPercent) {
+        if (batteryPercent < 0 || batteryPercent >= 50) return workerCount;
+        if (batteryPercent < 20) return Math.max(1, workerCount / 2);
+        return Math.max(1, workerCount * 3 / 4);
     }
 
     private void workerLoop() {
